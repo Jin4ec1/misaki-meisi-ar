@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>状況応答型ARポスター (Sound & Loop & Flex)</title>
+
+  <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-aframe.prod.js"></script>
+
+  <style>
+    body { margin: 0; overflow: hidden; touch-action: none; }
+
+    /* 操作パネル */
+    #control-panel {
+      position: fixed;
+      bottom: 30px;
+      left: 0;
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      gap: 20px;
+      z-index: 9999;
+      pointer-events: none;
+    }
+
+    .mode-btn {
+      pointer-events: auto;
+      padding: 12px 24px;
+      font-size: 16px;
+      font-weight: bold;
+      color: white;
+      border: none;
+      border-radius: 30px;
+      cursor: pointer;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+      background-color: #555;
+      touch-action: manipulation;
+    }
+    
+    #btn-day { background-color: #e67e22; }
+    #btn-night { background-color: #2c3e50; }
+
+    /* スタートガイド (音声を出すためにタップを促す) */
+    #start-guide {
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 20px;
+      border-radius: 10px;
+      text-align: center;
+      z-index: 10000;
+      pointer-events: none;
+      transition: opacity 0.5s;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="start-guide">画面をタップして<br>ARと音声をスタート</div>
+
+  <div id="control-panel">
+    <button id="btn-day" class="mode-btn">☀️ 昼モード</button>
+    <button id="btn-night" class="mode-btn">🌙 夜モード</button>
+  </div>
+
+  <a-scene 
+    mindar-image="imageTargetSrc: ./assets/targets.mind; uiScanning: yes; missTolerance: 1;" 
+    color-space="sRGB" 
+    renderer="colorManagement: true, physicallyCorrectLights" 
+    vr-mode-ui="enabled: false" 
+    device-orientation-permission-ui="enabled: false">
+
+    <a-assets>
+      
+      <video id="asset-day" 
+        src="./assets/video-day.mp4" 
+        preload="auto" 
+        loop="true" 
+        playsinline 
+        webkit-playsinline 
+        muted 
+        crossorigin="anonymous"></video>
+
+      <img id="asset-night" 
+        src="./assets/image-night.png" 
+        crossorigin="anonymous" />
+        
+    </a-assets>
+
+    <a-camera position="0 0 0" look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
+
+    <a-entity mindar-image-target="targetIndex: 0" id="target-entity">
+      
+      <a-plane 
+        id="ar-screen"
+        position="0 0 0" 
+        width="1" 
+        height="1" 
+        rotation="0 0 0"
+        material="shader: flat; transparent: true; opacity: 0;"
+        visible="true">
+      </a-plane>
+
+    </a-entity>
+  </a-scene>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      // 設定: アセットのID定義
+      const ASSET_IDS = {
+        day: 'asset-day',
+        night: 'asset-night'
+      };
+
+      // 状態管理
+      let currentMode = 'day'; // 'day' or 'night'
+      let isUnlocked = false;  // 初回タップ（音声許可）が終わったか
+
+      // DOM要素取得
+      const screenEl = document.getElementById('ar-screen');
+      const targetEntity = document.getElementById('target-entity');
+      const guideEl = document.getElementById('start-guide');
+      const btnDay = document.getElementById('btn-day');
+      const btnNight = document.getElementById('btn-night');
+
+      // アセット要素の取得
+      const assets = {
+        day: document.getElementById(ASSET_IDS.day),
+        night: document.getElementById(ASSET_IDS.night)
+      };
+
+      // ■ ヘルパー関数: 指定されたアセットの種類(VIDEO/IMG)を判定
+      const getAssetType = (element) => {
+        if (!element) return 'NONE';
+        return element.tagName; // "VIDEO" or "IMG"
+      };
+
+      // ■ コンテンツ切り替えのメインロジック
+      const updateContent = () => {
+        const activeAsset = assets[currentMode];
+        const type = getAssetType(activeAsset);
+
+        // 1. まず全ての動画を停止＆リセット（音が混ざらないように）
+        Object.values(assets).forEach(el => {
+          if (getAssetType(el) === 'VIDEO') {
+            el.pause();
+            // 見えてない動画はリセットしないと裏で進んでしまう
+            if (el !== activeAsset) el.currentTime = 0; 
+          }
+        });
+
+        // 2. マテリアル（見た目）を更新
+        if (type !== 'NONE') {
+          screenEl.setAttribute('material', 'src', `#${activeAsset.id}`);
+          screenEl.setAttribute('material', 'opacity', 1); // 表示
+        } else {
+          screenEl.setAttribute('material', 'opacity', 0); // 非表示
+        }
+
+        // 3. 動画なら再生制御 (ただしマーカーが見えている時のみ)
+        if (type === 'VIDEO' && isUnlocked && targetEntity.object3D.visible) {
+          // 音声付きで再生
+          activeAsset.muted = false; 
+          activeAsset.play().catch(e => console.log("再生エラー(タップ待ち):", e));
+        }
+      };
+
+      // ■ 初回タップ時の処理 (音声制限解除)
+      const unlockAudio = () => {
+        if (isUnlocked) return;
+        
+        // すべての動画アセットに対して「ミュート解除＆空再生」を行ってブラウザを騙す
+        Object.values(assets).forEach(el => {
+          if (getAssetType(el) === 'VIDEO') {
+            el.muted = false; // ★ここでミュート解除！
+            el.play().then(() => {
+              el.pause(); // 一旦止める
+              el.currentTime = 0;
+            }).catch(e => console.log("Unlock error:", e));
+          }
+        });
+
+        isUnlocked = true;
+        guideEl.style.opacity = '0'; // ガイドを消す
+        setTimeout(() => guideEl.style.display = 'none', 500);
+        
+        // 現在のモードを再適用して再生開始
+        updateContent();
+      };
+
+      // 画面全体のタップでロック解除
+      document.body.addEventListener('click', unlockAudio, { once: true });
+      document.body.addEventListener('touchstart', unlockAudio, { once: true });
+
+      // ■ ボタン操作
+      btnDay.addEventListener('click', (e) => {
+        e.stopPropagation();
+        currentMode = 'day';
+        console.log("Mode: Day");
+        updateContent();
+      });
+
+      btnNight.addEventListener('click', (e) => {
+        e.stopPropagation();
+        currentMode = 'night';
+        console.log("Mode: Night");
+        updateContent();
+      });
+
+      // ■ マーカー認識イベント
+      targetEntity.addEventListener("targetFound", () => {
+        console.log("Found");
+        const activeAsset = assets[currentMode];
+        // マーカーを見つけたら、動画の場合は再生再開
+        if (isUnlocked && getAssetType(activeAsset) === 'VIDEO') {
+          activeAsset.play();
+        }
+      });
+
+      targetEntity.addEventListener("targetLost", () => {
+        console.log("Lost");
+        const activeAsset = assets[currentMode];
+        // マーカーを見失ったら、動画は一時停止（音を止める）
+        if (getAssetType(activeAsset) === 'VIDEO') {
+          activeAsset.pause();
+        }
+      });
+
+      // 初期化実行
+      updateContent();
+    });
+  </script>
+</body>
+</html>
